@@ -1,54 +1,60 @@
-import json
 import os
+import json
 from googleapiclient.discovery import build
-from dotenv import load_dotenv
-import isodate
+from tracking_utils import log_event, timed_step
 
-load_dotenv()
+@timed_step(output_dir=None, step_name="fetch_channel_videos")
+def fetch_recent_videos(api_key, channel_ids, output_dir, max_results=10):
+    """
+    Busca os vídeos mais recentes de canais especificados.
+    Retorna uma lista de video_ids ainda não processados.
+    """
+    youtube = build("youtube", "v3", developerKey=api_key)
 
-API_KEY = os.getenv("YOUTUBE_API_KEY")
-YOUTUBE = build("youtube", "v3", developerKey=API_KEY)
+    processed_file = os.path.join(output_dir, "videos_processados.json")
+    if os.path.exists(processed_file):
+        with open(processed_file, "r") as f:
+            processed_ids = set(json.load(f))
+    else:
+        processed_ids = set()
 
-def get_channel_videos(channel_id, max_results=10):
-    """Pega os últimos vídeos de um canal"""
-    res = YOUTUBE.search().list(
-        part="snippet",
-        channelId=channel_id,
-        maxResults=max_results,
-        type="video",
-        order="date"
-    ).execute()
+    new_video_ids = []
 
-    videos = []
-    for item in res["items"]:
-        video_id = item["id"]["videoId"]
-        title = item["snippet"]["title"]
-        videos.append({"video_id": video_id, "title": title})
-    return videos
-
-def get_video_duration(video_id):
-    """Retorna a duração do vídeo (em segundos)"""
-    res = YOUTUBE.videos().list(
-        part="contentDetails",
-        id=video_id
-    ).execute()
-    duration = res["items"][0]["contentDetails"]["duration"]
-    return isodate.parse_duration(duration).total_seconds()
-
-def get_new_videos_from_channels(channels_file="channels.json"):
-    """Retorna vídeos novos e longos (60s+) de todos os canais"""
-    with open(channels_file) as f:
-        channel_ids = json.load(f)
-
-    all_videos = []
     for channel_id in channel_ids:
-        videos = get_channel_videos(channel_id)
-        for video in videos:
-            duration = get_video_duration(video["video_id"])
-            if duration > 60:
-                all_videos.append({
-                    "video_id": video["video_id"],
-                    "title": video["title"],
-                    "duration_sec": duration
-                })
-    return all_videos
+        try:
+            res = youtube.search().list(
+                channelId=channel_id,
+                part="id",
+                order="date",
+                maxResults=max_results
+            ).execute()
+
+            for item in res.get("items", []):
+                if item["id"]["kind"] != "youtube#video":
+                    continue
+                video_id = item["id"]["videoId"]
+                if video_id not in processed_ids:
+                    new_video_ids.append(video_id)
+        except Exception as e:
+            log_event(output_dir, {
+                "type": "channel_fetch_failed",
+                "channel_id": channel_id,
+                "error": str(e)
+            })
+
+    log_event(output_dir, {
+        "type": "crawler_results",
+        "channels_scanned": len(channel_ids),
+        "new_videos_found": len(new_video_ids),
+        "new_video_ids": new_video_ids
+    })
+
+    return new_video_ids, processed_file, processed_ids
+
+def update_processed_list(video_ids, processed_file, processed_ids):
+    """
+    Atualiza a lista local de vídeos processados.
+    """
+    processed_ids.update(video_ids)
+    with open(processed_file, "w") as f:
+        json.dump(list(processed_ids), f, indent=2)
