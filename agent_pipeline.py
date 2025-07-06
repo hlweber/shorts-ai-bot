@@ -31,7 +31,7 @@ def process_video(video_id):
     save_transcript(transcript_text, output_dir)
     save_srt(segments, os.path.join(output_dir, "subtitles.srt"))
 
-    audio_events = detect_audio_events(video_path)
+    audio_events = detect_audio_events(audio_path, db_offset=10.0, min_gap_sec=3)
     save_audio_events(audio_events, output_dir)
 
     blocks = segment_transcript(segments, max_duration=600)
