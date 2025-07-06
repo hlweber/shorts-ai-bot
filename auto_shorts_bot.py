@@ -1,45 +1,42 @@
 import os
-import json
-from apscheduler.schedulers.blocking import BlockingScheduler
-from youtube_crawler import get_new_videos_from_channels
 from agent_pipeline import process_video
+from youtube_crawler import fetch_recent_videos, update_processed_list
+from tracking_utils import log_event
 
-PROCESSED_DB = "processed_videos.json"
+def run_bot(youtube_api_key, channel_ids, base_dir="outputs", max_videos=2, **kwargs):
+    """
+    Executa o pipeline completo:
+    - Busca vídeos novos
+    - Processa cada vídeo
+    - Atualiza lista de vídeos já processados
+    """
+    os.makedirs(base_dir, exist_ok=True)
+    output_dir = os.path.join(base_dir, "_log")
+    os.makedirs(output_dir, exist_ok=True)
 
-def load_processed():
-    """Carrega lista de vídeos já processados"""
-    if os.path.exists(PROCESSED_DB):
-        with open(PROCESSED_DB, "r") as f:
-            return set(json.load(f))
-    return set()
+    new_ids, processed_file, processed_ids = fetch_recent_videos(
+        api_key=youtube_api_key,
+        channel_ids=channel_ids,
+        output_dir=output_dir,
+        max_results=max_videos
+    )
 
-def save_processed(video_ids):
-    """Salva lista atualizada de vídeos processados"""
-    with open(PROCESSED_DB, "w") as f:
-        json.dump(list(video_ids), f)
-
-def daily_job():
-    print("🔁 Iniciando rotina diária de geração de Shorts...")
-    already_done = load_processed()
-    new_videos = get_new_videos_from_channels()
-
-    to_process = [v for v in new_videos if v["video_id"] not in already_done]
-
-    print(f"🎯 {len(to_process)} vídeos novos encontrados.")
-
-    for video in to_process:
-        print(f"▶️ Processando: {video['title']}")
+    for video_id in new_ids[:max_videos]:
         try:
-            process_video(video["video_id"])
-            already_done.add(video["video_id"])
+            video_path = f"https://www.youtube.com/watch?v={video_id}"
+            log_event(output_dir, {
+                "type": "start_processing_video",
+                "video_id": video_id,
+                "source": video_path
+            })
+
+            process_video(video_id=video_id, video_path=video_path, output_base=base_dir, **kwargs)
+
         except Exception as e:
-            print(f"❌ Erro ao processar {video['video_id']}: {e}")
+            log_event(output_dir, {
+                "type": "video_processing_exception",
+                "video_id": video_id,
+                "error": str(e)
+            })
 
-    save_processed(already_done)
-    print("✅ Fim do ciclo.")
-
-if __name__ == "__main__":
-    scheduler = BlockingScheduler()
-    scheduler.add_job(daily_job, trigger="cron", hour=3)  # Roda todo dia às 03:00
-    print("⏰ Scheduler ativo. Ctrl+C para parar.")
-    scheduler.start()
+    update_processed_list(new_ids[:max_videos], processed_file, processed_ids)
