@@ -8,8 +8,11 @@ from subtitle_utils import save_srt
 from video_cutter import cut_highlight_segments
 from post_processing import apply_music_and_overlay
 from tracking_utils import log_event
+from video_metadata import get_video_metadata
 
-def process_video(video_id, video_path, output_base="outputs", interval_sec=3, gpt_model="gpt-4o", music_path=None, overlay_img_path=None, max_shorts=5):
+def process_video(video_id, video_path, output_base="outputs", interval_sec=20,
+                  gpt_model="gpt-4o", music_path=None, overlay_img_path=None,
+                  max_shorts=5, youtube_api_key=None):
     output_dir = os.path.join(output_base, video_id)
     os.makedirs(output_dir, exist_ok=True)
 
@@ -20,6 +23,11 @@ def process_video(video_id, video_path, output_base="outputs", interval_sec=3, g
     })
 
     try:
+        # Metadados do vídeo
+        metadata = None
+        if youtube_api_key:
+            metadata = get_video_metadata(youtube_api_key, video_id, output_dir)
+
         # Transcrição + Segmentos
         transcript, segments, language = transcribe_audio(video_path, output_dir)
         srt_path = os.path.join(output_dir, "subtitles.srt")
@@ -60,7 +68,8 @@ def process_video(video_id, video_path, output_base="outputs", interval_sec=3, g
             "type": "video_pipeline_complete",
             "highlights_used": len(highlights),
             "shorts_created": len(os.listdir(processed_dir)),
-            "language": language
+            "language": language,
+            "metadata": metadata
         })
 
     except Exception as e:
