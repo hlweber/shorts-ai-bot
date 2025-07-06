@@ -9,29 +9,36 @@ from video_cutter import cut_highlight_segments
 from post_processing import apply_music_and_overlay
 from tracking_utils import log_event
 from video_metadata import get_video_metadata
+from video_downloader import download_video
 
-def process_video(video_id, video_path, output_base="outputs", interval_sec=20,
+def process_video(video_id, video_path=None, output_base="outputs", interval_sec=3,
                   gpt_model="gpt-4o", music_path=None, overlay_img_path=None,
                   max_shorts=5, youtube_api_key=None):
+
     output_dir = os.path.join(output_base, video_id)
     os.makedirs(output_dir, exist_ok=True)
 
     log_event(output_dir, {
         "type": "video_start",
         "video_id": video_id,
-        "video_path": video_path
+        "input_video_path": video_path,
     })
 
     try:
-        # Metadados do vídeo
+        # Baixar o vídeo se não estiver salvo localmente
+        if not video_path or not os.path.exists(video_path):
+            video_url = f"https://www.youtube.com/watch?v={video_id}"
+            video_path = os.path.join(output_dir, "original.mp4")
+            download_video(video_url, video_path, output_dir=output_dir)
+
+        # Metadados (opcional)
         metadata = None
         if youtube_api_key:
             metadata = get_video_metadata(youtube_api_key, video_id, output_dir)
 
-        # Transcrição + Segmentos
+        # Transcrição
         transcript, segments, language = transcribe_audio(video_path, output_dir)
-        srt_path = os.path.join(output_dir, "subtitles.srt")
-        save_srt(segments, srt_path, output_dir=output_dir)
+        save_srt(segments, os.path.join(output_dir, "subtitles.srt"), output_dir=output_dir)
 
         # Frames + Áudio
         frames = extract_frames(video_path, output_dir, interval_sec=interval_sec)
@@ -53,7 +60,7 @@ def process_video(video_id, video_path, output_base="outputs", interval_sec=20,
         # Corte dos Shorts
         cut_highlight_segments(video_path, highlights, output_dir, max_segments=max_shorts)
 
-        # Pós-processamento de cada short
+        # Pós-processamento dos cortes
         shorts_dir = os.path.join(output_dir, "shorts")
         processed_dir = os.path.join(output_dir, "processed")
         os.makedirs(processed_dir, exist_ok=True)
@@ -62,10 +69,17 @@ def process_video(video_id, video_path, output_base="outputs", interval_sec=20,
             if f.endswith(".mp4"):
                 short_path = os.path.join(shorts_dir, f)
                 out_path = os.path.join(processed_dir, f)
-                apply_music_and_overlay(short_path, music_path, out_path, output_dir, image_overlay=overlay_img_path)
+                apply_music_and_overlay(
+                    short_path,
+                    music_path,
+                    out_path,
+                    output_dir,
+                    image_overlay=overlay_img_path
+                )
 
         log_event(output_dir, {
             "type": "video_pipeline_complete",
+            "video_id": video_id,
             "highlights_used": len(highlights),
             "shorts_created": len(os.listdir(processed_dir)),
             "language": language,
@@ -75,6 +89,7 @@ def process_video(video_id, video_path, output_base="outputs", interval_sec=20,
     except Exception as e:
         log_event(output_dir, {
             "type": "pipeline_failed",
+            "video_id": video_id,
             "error": str(e)
         })
         raise
