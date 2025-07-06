@@ -4,9 +4,12 @@ from frame_utils import extract_frames
 from transcript_utils import transcribe_audio
 from audio_events import detect_audio_events
 from prompt_utils import analyze_video_with_gpt
+from subtitle_utils import save_srt
+from video_cutter import cut_highlight_segments
+from post_processing import apply_music_and_overlay
 from tracking_utils import log_event
 
-def process_video(video_id, video_path, output_base="outputs", interval_sec=3, gpt_model="gpt-4o"):
+def process_video(video_id, video_path, output_base="outputs", interval_sec=3, gpt_model="gpt-4o", music_path=None, overlay_img_path=None, max_shorts=5):
     output_dir = os.path.join(output_base, video_id)
     os.makedirs(output_dir, exist_ok=True)
 
@@ -17,10 +20,12 @@ def process_video(video_id, video_path, output_base="outputs", interval_sec=3, g
     })
 
     try:
-        # Transcrição
+        # Transcrição + Segmentos
         transcript, segments, language = transcribe_audio(video_path, output_dir)
+        srt_path = os.path.join(output_dir, "subtitles.srt")
+        save_srt(segments, srt_path, output_dir=output_dir)
 
-        # Frames e áudio
+        # Frames + Áudio
         frames = extract_frames(video_path, output_dir, interval_sec=interval_sec)
         audio_events = detect_audio_events(os.path.join(output_dir, "audio.mp3"), output_dir)
 
@@ -37,17 +42,30 @@ def process_video(video_id, video_path, output_base="outputs", interval_sec=3, g
             model=gpt_model
         )
 
+        # Corte dos Shorts
+        cut_highlight_segments(video_path, highlights, output_dir, max_segments=max_shorts)
+
+        # Pós-processamento de cada short
+        shorts_dir = os.path.join(output_dir, "shorts")
+        processed_dir = os.path.join(output_dir, "processed")
+        os.makedirs(processed_dir, exist_ok=True)
+
+        for f in os.listdir(shorts_dir):
+            if f.endswith(".mp4"):
+                short_path = os.path.join(shorts_dir, f)
+                out_path = os.path.join(processed_dir, f)
+                apply_music_and_overlay(short_path, music_path, out_path, output_dir, image_overlay=overlay_img_path)
+
         log_event(output_dir, {
-            "type": "video_processed",
-            "video_id": video_id,
-            "highlights_total": len(highlights),
+            "type": "video_pipeline_complete",
+            "highlights_used": len(highlights),
+            "shorts_created": len(os.listdir(processed_dir)),
             "language": language
         })
 
     except Exception as e:
         log_event(output_dir, {
-            "type": "video_processing_failed",
-            "video_id": video_id,
+            "type": "pipeline_failed",
             "error": str(e)
         })
         raise
