@@ -1,75 +1,64 @@
+import json
 import base64
 import io
 from PIL import Image
+from tracking_utils import log_event, timed_step
 
-def encode_frame_to_base64(frame_rgb):
-    """Converte frame RGB em imagem JPEG base64"""
-    image = Image.fromarray(frame_rgb)
-    buffer = io.BytesIO()
-    image.save(buffer, format="JPEG")
-    return base64.b64encode(buffer.getvalue()).decode("utf-8")
+def image_to_base64(image):
+    img = Image.fromarray(image)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG")
+    return base64.b64encode(buf.getvalue()).decode()
 
-def analyze_video_with_gpt4o(client, transcript, frames, duration_sec, audio_events=None):
-    """Usa GPT-4o para sugerir cortes virais com base em texto + imagem + som"""
-
-    image_payloads = []
-    for frame in frames[:10]:  # Envia até 10 frames
-        b64 = encode_frame_to_base64(frame)
-        image_payloads.append({
-            "type": "image_url",
-            "image_url": {"url": f"data:image/jpeg;base64,{b64}"}
-        })
-
-    audio_clues = "\n".join(audio_events) if audio_events else "Nenhum evento sonoro relevante encontrado."
+@timed_step(output_dir=None, step_name="gpt_analysis")
+def analyze_video_with_gpt(client, transcript, frames, duration_sec, audio_events, output_dir, model="gpt-4o"):
+    """
+    Monta o prompt e envia para o modelo GPT, incluindo transcrição, eventos e imagens.
+    Loga o envio, a resposta e qualquer falha.
+    """
+    images_to_send = frames[:3]  # segurança: só 3 imagens
+    base64_imgs = [image_to_base64(img) for img in images_to_send]
 
     messages = [
-        {"role": "system", "content": "Você é um editor de vídeos virais especializado em Shorts e Reels."},
-        {"role": "user", "content": [
-            {"type": "text", "text": f"""Duração do vídeo: {int(duration_sec // 60)} minutos
-
-Transcrição:
-{transcript}
-
-Eventos sonoros detectados:
-{audio_clues}
-
-Sua tarefa:
-- Sugira até 1 corte por minuto de vídeo, com duração de 15 a 60 segundos
-- Para cada corte, informe:
-  - Início (MM:SS)
-  - Fim (MM:SS)
-  - Título chamativo
-  - Estilo de trilha sonora (ex: meme, épica, suspense)
-  - Emoji ou sticker visual (ex: 😂, 💥, 🔥)
-"""}
-        ] + image_payloads}
+        {"role": "system", "content": "Você é um editor de vídeos curtos que seleciona os melhores trechos virais de vídeos longos."},
+        {"role": "user", "content": f"Transcrição:\n{transcript[:3000]}\n\nEventos de áudio detectados: {audio_events}"}
     ]
 
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=messages,
-        max_tokens=2000
-    )
+    for img in base64_imgs:
+        messages.append({
+            "role": "user",
+            "content": {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{img}"}
+            }
+        })
 
-    return extract_highlights_from_response(response.choices[0].message.content)
+    log_event(output_dir, {
+        "type": "gpt_prompt_sent",
+        "model": model,
+        "input_tokens_est": len(transcript.split()) + len(audio_events) * 10,
+        "frames_sent": len(images_to_send),
+        "duration_sec": duration_sec
+    })
 
-def extract_highlights_from_response(text):
-    """Extrai cortes com trilha sonora e visual sugerido"""
-    highlights = []
-    blocks = text.strip().split("\n\n")
-    for block in blocks:
-        item = {"start": None, "end": None, "title": "", "soundtrack": "", "overlay": ""}
-        for line in block.strip().split("\n"):
-            if "Início:" in line:
-                item["start"] = line.split(":", 1)[1].strip()
-            elif "Fim:" in line:
-                item["end"] = line.split(":", 1)[1].strip()
-            elif "Título:" in line:
-                item["title"] = line.split(":", 1)[1].strip().strip('"')
-            elif "Música:" in line or "Trilha sonora:" in line:
-                item["soundtrack"] = line.split(":", 1)[1].strip()
-            elif "Sticker:" in line or "Emoji:" in line:
-                item["overlay"] = line.split(":", 1)[1].strip()
-        if item["start"] and item["end"]:
-            highlights.append(item)
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=messages
+        )
+        text_response = response.choices[0].message.content
+        highlights = json.loads(text_response)
+    except Exception as e:
+        log_event(output_dir, {
+            "type": "gpt_response_failure",
+            "error": str(e)
+        })
+        return []
+
+    log_event(output_dir, {
+        "type": "gpt_response_success",
+        "highlights_count": len(highlights),
+        "preview": str(highlights)[:300]
+    })
+
     return highlights
