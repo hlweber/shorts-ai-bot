@@ -22,16 +22,21 @@ def authenticate_youtube():
     youtube = googleapiclient.discovery.build("youtube", "v3", credentials=creds)
     return youtube
 
-def upload_short(youtube, video_path, title, description, output_dir, tags=None, category_id="22"):
+def upload_short(youtube, video_path, metadata, output_dir):
     """
-    Sobe um vídeo curto para o YouTube como Shorts.
+    Sobe um vídeo curto para o YouTube como Shorts, usando metadados dinâmicos.
     """
     try:
+        title = metadata.get("title", "Shorts gerado por IA")
+        description = metadata.get("description", "Conteúdo gerado automaticamente.")
+        tags = metadata.get("tags", [])
+        category_id = metadata.get("category_id", "22")
+
         request_body = {
             "snippet": {
                 "title": title,
                 "description": description,
-                "tags": tags or [],
+                "tags": tags,
                 "categoryId": category_id
             },
             "status": {
