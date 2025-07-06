@@ -1,44 +1,53 @@
 import os
 import json
+import time
 from datetime import datetime
 
-def make_output_dir(video_id):
-    out_dir = os.path.join("outputs", video_id)
-    os.makedirs(out_dir, exist_ok=True)
-    return out_dir
+def log_event(output_dir, event_data):
+    """
+    Salva um evento no arquivo execution_log.json dentro da pasta de saída.
+    """
+    log_path = os.path.join(output_dir, "execution_log.json")
+    os.makedirs(output_dir, exist_ok=True)
 
-def save_transcript(transcript_text, output_dir):
-    with open(os.path.join(output_dir, "transcript.txt"), "w", encoding="utf-8") as f:
-        f.write(transcript_text)
+    if os.path.exists(log_path):
+        with open(log_path, "r", encoding="utf-8") as f:
+            log = json.load(f)
+    else:
+        log = []
 
-def save_audio_events(events, output_dir):
-    with open(os.path.join(output_dir, "audio_events.txt"), "w", encoding="utf-8") as f:
-        f.write("\n".join(events))
+    event_data["timestamp"] = datetime.utcnow().isoformat()
+    log.append(event_data)
 
-def save_metadata(video_meta, highlights, output_dir):
-    data = {
-        **video_meta,
-        "processed_at": datetime.utcnow().isoformat(),
-        "highlights": highlights
-    }
-    with open(os.path.join(output_dir, "metadata.json"), "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    with open(log_path, "w", encoding="utf-8") as f:
+        json.dump(log, f, indent=2, ensure_ascii=False)
 
-def log_event(message, output_dir):
-    log_path = os.path.join(output_dir, "execution.log")
-    timestamp = datetime.utcnow().strftime("[%Y-%m-%d %H:%M:%S]")
-    with open(log_path, "a", encoding="utf-8") as f:
-        f.write(f"{timestamp} {message}\n")
 
-def append_processed_video(video_id):
-    DB_PATH = "processed_videos.json"
-    try:
-        with open(DB_PATH, "r") as f:
-            data = json.load(f)
-    except:
-        data = []
-
-    if video_id not in data:
-        data.append(video_id)
-        with open(DB_PATH, "w") as f:
-            json.dump(data, f)
+def timed_step(output_dir, step_name):
+    """
+    Decorador que mede o tempo de execução de uma função e loga o resultado.
+    Também registra falhas com mensagem de erro.
+    """
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            start = time.time()
+            try:
+                result = func(*args, **kwargs)
+                duration = round(time.time() - start, 2)
+                log_event(output_dir, {
+                    "type": "step_success",
+                    "step": step_name,
+                    "duration_sec": duration
+                })
+                return result
+            except Exception as e:
+                duration = round(time.time() - start, 2)
+                log_event(output_dir, {
+                    "type": "step_failure",
+                    "step": step_name,
+                    "duration_sec": duration,
+                    "error": str(e)
+                })
+                raise
+        return wrapper
+    return decorator
