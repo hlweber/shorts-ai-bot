@@ -1,28 +1,47 @@
 from googleapiclient.discovery import build
-import isodate
-import os
+from tracking_utils import log_event
 
-def get_video_metadata(video_id):
-    api_key = os.getenv("YOUTUBE_API_KEY")
-    yt = build("youtube", "v3", developerKey=api_key)
-    res = yt.videos().list(
-        part="snippet,contentDetails",
-        id=video_id
-    ).execute()
+def get_video_metadata(youtube_api_key, video_id, output_dir):
+    """
+    Busca metadados do vídeo via API do YouTube.
+    """
+    try:
+        youtube = build("youtube", "v3", developerKey=youtube_api_key)
+        request = youtube.videos().list(
+            part="snippet,contentDetails,statistics",
+            id=video_id
+        )
+        response = request.execute()
 
-    if not res["items"]:
-        return {}
+        if not response["items"]:
+            raise ValueError("Vídeo não encontrado")
 
-    info = res["items"][0]
-    snippet = info["snippet"]
-    duration_iso = info["contentDetails"]["duration"]
-    duration_sec = int(isodate.parse_duration(duration_iso).total_seconds())
+        item = response["items"][0]
+        snippet = item["snippet"]
 
-    return {
-        "video_id": video_id,
-        "title": snippet["title"],
-        "channel": snippet["channelTitle"],
-        "description": snippet.get("description", ""),
-        "upload_date": snippet["publishedAt"],
-        "duration_sec": duration_sec
-    }
+        metadata = {
+            "title": snippet.get("title"),
+            "channel": snippet.get("channelTitle"),
+            "published_at": snippet.get("publishedAt"),
+            "description": snippet.get("description"),
+            "tags": snippet.get("tags", []),
+            "category_id": snippet.get("categoryId"),
+            "duration": item["contentDetails"]["duration"],
+            "view_count": item["statistics"].get("viewCount")
+        }
+
+        log_event(output_dir, {
+            "type": "video_metadata",
+            "video_id": video_id,
+            "metadata": metadata
+        })
+
+        return metadata
+
+    except Exception as e:
+        log_event(output_dir, {
+            "type": "video_metadata_failed",
+            "video_id": video_id,
+            "error": str(e)
+        })
+        return None
