@@ -1,62 +1,66 @@
 import os
-import pickle
-from google_auth_oauthlib.flow import InstalledAppFlow
+import json
+import google.auth
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
+from tracking_utils import log_event
 
-# Escopos exigidos para upload
-SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+def authenticate_youtube():
+    """
+    Autentica com as credenciais locais da Google (OAuth2).
+    Requer token.json e client_secret.json previamente configurados.
+    """
+    import google_auth_oauthlib.flow
+    import googleapiclient.discovery
 
-CLIENT_SECRET_FILE = "client_secret.json"
-CREDENTIALS_FILE = "youtube_token.pkl"
-
-def get_authenticated_service():
-    """Autentica e retorna serviço da YouTube API"""
-    creds = None
-
-    if os.path.exists(CREDENTIALS_FILE):
-        with open(CREDENTIALS_FILE, "rb") as token:
-            creds = pickle.load(token)
-    else:
-        flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRET_FILE, SCOPES)
-        creds = flow.run_local_server(port=8080)
-        with open(CREDENTIALS_FILE, "wb") as token:
-            pickle.dump(creds, token)
-
-    return build("youtube", "v3", credentials=creds)
-
-def upload_short(video_path, title, description="#shorts", privacy_status="public"):
-    """Faz upload do vídeo como um Short no YouTube"""
-
-    youtube = get_authenticated_service()
-
-    body = {
-        "snippet": {
-            "title": title,
-            "description": description,
-            "tags": ["shorts"],
-            "categoryId": "22"  # People & Blogs
-        },
-        "status": {
-            "privacyStatus": privacy_status,
-            "selfDeclaredMadeForKids": False
-        }
-    }
-
-    media = MediaFileUpload(video_path, mimetype="video/mp4", resumable=True)
-
-    request = youtube.videos().insert(
-        part="snippet,status",
-        body=body,
-        media_body=media
+    scopes = ["https://www.googleapis.com/auth/youtube.upload"]
+    flow = google_auth_oauthlib.flow.InstalledAppFlow.from_client_secrets_file(
+        "client_secret.json", scopes
     )
+    creds = flow.run_console()
 
-    response = None
-    while response is None:
-        status, response = request.next_chunk()
-        if status:
-            print(f"⬆️ Upload em andamento: {int(status.progress() * 100)}%")
+    youtube = googleapiclient.discovery.build("youtube", "v3", credentials=creds)
+    return youtube
 
-    video_id = response["id"]
-    print(f"✅ Upload completo! Vídeo: https://youtu.be/{video_id}")
-    return f"https://youtu.be/{video_id}"
+def upload_short(youtube, video_path, title, description, output_dir, tags=None, category_id="22"):
+    """
+    Sobe um vídeo curto para o YouTube como Shorts.
+    """
+    try:
+        request_body = {
+            "snippet": {
+                "title": title,
+                "description": description,
+                "tags": tags or [],
+                "categoryId": category_id
+            },
+            "status": {
+                "privacyStatus": "public",
+                "madeForKids": False
+            }
+        }
+
+        media_file = MediaFileUpload(video_path, chunksize=-1, resumable=True)
+
+        request = youtube.videos().insert(
+            part="snippet,status",
+            body=request_body,
+            media_body=media_file
+        )
+
+        response = request.execute()
+
+        log_event(output_dir, {
+            "type": "upload_success",
+            "video_path": video_path,
+            "video_id": response["id"],
+            "youtube_url": f"https://youtu.be/{response['id']}"
+        })
+
+    except Exception as e:
+        log_event(output_dir, {
+            "type": "upload_failed",
+            "video_path": video_path,
+            "error": str(e)
+        })
+        raise
