@@ -15,7 +15,7 @@ def extract_audio(video_path, audio_path="audio.mp3"):
     print(f"📦 Áudio salvo: {audio_path} ({size_mb:.2f} MB)")
     return audio_path
 
-def transcribe_audio(video_path, output_dir):
+def transcribe_audio(video_path):
     """Transcreve usando API da OpenAI e salva arquivos. Rejeita se > 25MB."""
     audio_path = extract_audio(video_path)
     size_mb = os.path.getsize(audio_path) / (1024 * 1024)
@@ -31,19 +31,7 @@ def transcribe_audio(video_path, output_dir):
             response_format="verbose_json"
         )
 
-    # Criar saída e salvar .txt
-    os.makedirs(output_dir, exist_ok=True)
-    transcript_txt = os.path.join(output_dir, "transcript.txt")
-    with open(transcript_txt, "w", encoding="utf-8") as f:
-        f.write(transcript["text"])
-    print(f"✅ Transcrição salva: {transcript_txt}")
-
-    # Salvar legendas .srt
-    srt_path = os.path.join(output_dir, "subtitles.srt")
-    save_srt(transcript["segments"], srt_path)
-    print(f"✅ Legendas salvas: {srt_path}")
-
-    return transcript["text"], transcript["segments"], transcript.get("language", "und")
+    return transcript["text"], transcript["segments"]
 
 def format_timestamp(seconds):
     """Converte segundos em timestamp padrão SRT."""
