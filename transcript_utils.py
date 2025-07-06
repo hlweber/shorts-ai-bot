@@ -45,7 +45,7 @@ def save_srt(segments, output_path):
     """Salva arquivo .srt com os segmentos da transcrição."""
     with open(output_path, "w", encoding="utf-8") as f:
         for i, s in enumerate(segments, 1):
-            start = format_timestamp(s["start"])
-            end = format_timestamp(s["end"])
-            text = s["text"].strip().replace("-->", "→")
+            start = format_timestamp(s.start)
+            end = format_timestamp(s.end)
+            text = s.text.strip().replace("-->", "→")
             f.write(f"{i}\n{start} --> {end}\n{text}\n\n")
