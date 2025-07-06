@@ -31,7 +31,7 @@ def transcribe_audio(video_path):
             response_format="verbose_json"
         )
 
-    return transcript["text"], transcript["segments"]
+    return transcript.text, transcript.segments
 
 def format_timestamp(seconds):
     """Converte segundos em timestamp padrão SRT."""
