@@ -1,51 +1,42 @@
 import os
 import ffmpeg
 from openai import OpenAI
+from tracking_utils import log_event, timed_step
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+client = OpenAI()
 
-MAX_API_SIZE_MB = 25
-BITRATE = "64k"
-
-def extract_audio(video_path, audio_path="audio.mp3"):
-    """Extrai áudio em baixa taxa para reduzir tamanho e evitar erro 413."""
-    print(f"🎧 Extraindo áudio com bitrate {BITRATE}...")
-    ffmpeg.input(video_path).output(audio_path, audio_bitrate=BITRATE).run(overwrite_output=True, quiet=True)
-    size_mb = os.path.getsize(audio_path) / (1024 * 1024)
-    print(f"📦 Áudio salvo: {audio_path} ({size_mb:.2f} MB)")
+def extract_audio(video_path, audio_path):
+    ffmpeg.input(video_path).output(audio_path).run(overwrite_output=True, quiet=True)
     return audio_path
 
-def transcribe_audio(video_path):
-    """Transcreve usando API da OpenAI e salva arquivos. Rejeita se > 25MB."""
-    audio_path = extract_audio(video_path)
-    size_mb = os.path.getsize(audio_path) / (1024 * 1024)
-    
-    if size_mb > MAX_API_SIZE_MB:
-        raise ValueError(f"❌ Áudio tem {size_mb:.2f} MB — excede o limite de 25MB da API.")
+@timed_step(output_dir=None, step_name="transcribe_audio")
+def transcribe_audio(video_path, output_dir, model="whisper-1"):
+    """
+    Extrai o áudio do vídeo e gera transcrição com o modelo Whisper.
+    Salva o texto e registra no log.
+    """
+    audio_path = os.path.join(output_dir, "audio.mp3")
+    extract_audio(video_path, audio_path)
 
-    print("📤 Enviando áudio para a API Whisper...")
     with open(audio_path, "rb") as f:
         transcript = client.audio.transcriptions.create(
-            model="whisper-1",
+            model=model,
             file=f,
             response_format="verbose_json"
         )
 
-    return transcript.text, transcript.segments
+    text = transcript.text
+    segments = transcript.segments
+    language = transcript.language
 
-def format_timestamp(seconds):
-    """Converte segundos em timestamp padrão SRT."""
-    ms = int((seconds - int(seconds)) * 1000)
-    h = int(seconds // 3600)
-    m = int((seconds % 3600) // 60)
-    s = int(seconds % 60)
-    return f"{h:02}:{m:02}:{s:02},{ms:03}"
+    with open(os.path.join(output_dir, "transcript.txt"), "w", encoding="utf-8") as f:
+        f.write(text)
 
-def save_srt(segments, output_path):
-    """Salva arquivo .srt com os segmentos da transcrição."""
-    with open(output_path, "w", encoding="utf-8") as f:
-        for i, s in enumerate(segments, 1):
-            start = format_timestamp(s.start)
-            end = format_timestamp(s.end)
-            text = s.text.strip().replace("-->", "→")
-            f.write(f"{i}\n{start} --> {end}\n{text}\n\n")
+    log_event(output_dir, {
+        "type": "transcription",
+        "language": language,
+        "segments": len(segments),
+        "length_text": len(text)
+    })
+
+    return text, segments, language
